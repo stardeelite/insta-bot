@@ -11,11 +11,26 @@ function log(stage, msg, data = null) {
     }
 }
 
-function phpPost(params, fileBuffer) {
+function phpPost(params, fileContent) {
     return new Promise((resolve, reject) => {
-        const postData = fileBuffer
-            ? querystring.stringify(params) + '&file=' + encodeURIComponent(fileBuffer)
-            : querystring.stringify(params);
+
+        const boundary = '----NodeFormBoundary' + Math.random().toString(16);
+        let body = '';
+
+        for (const k in params) {
+            body += `--${boundary}\r\n`;
+            body += `Content-Disposition: form-data; name="${k}"\r\n\r\n`;
+            body += `${params[k]}\r\n`;
+        }
+
+        if (fileContent !== undefined) {
+            body += `--${boundary}\r\n`;
+            body += `Content-Disposition: form-data; name="file"; filename="data.json"\r\n`;
+            body += `Content-Type: application/json\r\n\r\n`;
+            body += fileContent + `\r\n`;
+        }
+
+        body += `--${boundary}--\r\n`;
 
         const url = new URL(PHP_ENDPOINT);
 
@@ -24,23 +39,23 @@ function phpPost(params, fileBuffer) {
             hostname: url.hostname,
             path: url.pathname,
             headers: {
-                'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData)
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                'Content-Length': Buffer.byteLength(body)
             }
         }, res => {
-            let body = '';
-            res.on('data', c => body += c);
+            let out = '';
+            res.on('data', c => out += c);
             res.on('end', () => {
                 try {
-                    resolve(JSON.parse(body));
+                    resolve(JSON.parse(out));
                 } catch {
-                    reject(new Error("Invalid JSON from PHP: " + body));
+                    reject(new Error("Invalid JSON from PHP: " + out));
                 }
             });
         });
 
         req.on('error', reject);
-        req.write(postData);
+        req.write(body);
         req.end();
     });
 }
