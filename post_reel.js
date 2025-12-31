@@ -122,7 +122,7 @@ async function run() {
 
         if (!container.id) throw new Error("Container creation failed");
 
-        await new Promise(r => setTimeout(r, 15000));
+        await new Promise(r => setTimeout(r, 60000));
 
         /* ===== POLL ===== */
         let ready = false;
@@ -136,7 +136,7 @@ async function run() {
                 break;
             }
             log("Retrying", "poll " + i);
-            await new Promise(r => setTimeout(r, 15000));
+            await new Promise(r => setTimeout(r, 30000));
         }
 
         if (!ready) throw new Error("Processing timeout");
