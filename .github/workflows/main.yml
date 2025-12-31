@@ -13,6 +13,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+      - name: Wait small random offset
+        run: |
+          OFFSET=$(( RANDOM % 10 ))  # 0-9 minutes
+          echo "Waiting $OFFSET minutes before running..."
+          sleep $(( OFFSET * 60 ))
       - name: Run Reel Bot
         env:
           INSTA_TOKEN: ${{ secrets.INSTA_TOKEN }}
