@@ -4,6 +4,7 @@ const querystring = require('querystring');
 const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
 const TOKEN = process.env.INSTA_TOKEN;
 
+// Helper to communicate with PHP file manager
 function phpPost(params, fileBuffer) {
     return new Promise((resolve, reject) => {
         const postData = fileBuffer
@@ -39,9 +40,27 @@ function phpPost(params, fileBuffer) {
     });
 }
 
+// Wait for webhook trigger
+async function waitForWebhook() {
+    console.log("⏳ Waiting for webhook trigger...");
+    while (true) {
+        // Check for a "webhook_buffer.json" flag set by your website
+        const webhookResp = await phpPost({ action: 'download', path: 'webhook_buffer.json' });
+        const webhookData = webhookResp && webhookResp.triggered;
+        if (webhookData) break;
+
+        // Wait 5 seconds before checking again
+        await new Promise(r => setTimeout(r, 5000));
+    }
+    console.log("⚡ Webhook triggered, continuing posting flow...");
+}
+
 async function run() {
     try {
-        // 1. Load the Queue from server
+        // 1. Wait for Instagram webhook trigger via your website
+        await waitForWebhook();
+
+        // 2. Load the Queue from server
         let bufferResp = await phpPost({ action: 'download', path: 'buffer.json' });
         let buffer = Array.isArray(bufferResp) ? bufferResp : [];
         if (buffer.length === 0) return console.log("Buffer is empty.");
@@ -51,7 +70,7 @@ async function run() {
 
         console.log(`🚀 Posting video: ${target.id}`);
 
-        // 2. Create Instagram container
+        // 3. Create Instagram container
         const containerResp = await fetch(`https://graph.instagram.com/v24.0/me/media`, {
             method: 'POST',
             body: new URLSearchParams({
@@ -64,17 +83,12 @@ async function run() {
         const container = await containerResp.json();
         if (!container.id) throw new Error(`Container Fail: ${JSON.stringify(container)}`);
 
-        // 3. Poll status_code
-        let isReady = false;
-        for (let i = 0; i < 15; i++) {
-            const statusResp = await fetch(`https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${TOKEN}`);
-            const statusData = await statusResp.json();
-            if (statusData.status_code === 'FINISHED') { isReady = true; break; }
-            await new Promise(r => setTimeout(r, 20000));
-        }
-        if (!isReady) throw new Error("Video processing timed out.");
+        // 4. Poll status_code (optional, keep short since webhook ensures ready)
+        const statusResp = await fetch(`https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${TOKEN}`);
+        const statusData = await statusResp.json();
+        if (statusData.status_code !== 'FINISHED') throw new Error("Video processing not finished.");
 
-        // 4. Publish Reel
+        // 5. Publish Reel
         const publishResp = await fetch(`https://graph.instagram.com/v24.0/me/media_publish`, {
             method: 'POST',
             body: new URLSearchParams({ creation_id: container.id, access_token: TOKEN })
@@ -83,7 +97,7 @@ async function run() {
         if (!publish.id) throw new Error(`Publish Fail: ${JSON.stringify(publish)}`);
         console.log(`✅ Reel Live: ${publish.id}`);
 
-        // 5. Post Comments
+        // 6. Post Comments
         if (Array.isArray(target.comments)) {
             for (const comment of target.comments) {
                 await fetch(`https://graph.instagram.com/v24.0/${publish.id}/comments`, {
@@ -93,17 +107,17 @@ async function run() {
             }
         }
 
-        // 6. Update buffer.json on server
+        // 7. Update buffer.json on server
         buffer.shift(); // remove posted video
         await phpPost({ action: 'upload', path: 'buffer.json' }, JSON.stringify(buffer));
 
-        // 7. Update history.json on server
+        // 8. Update history.json on server
         let historyResp = await phpPost({ action: 'download', path: 'history.json' });
         let history = Array.isArray(historyResp) ? historyResp : [];
         history.push({ ...target, postTime: new Date().toISOString(), status: "success" });
         await phpPost({ action: 'upload', path: 'history.json' }, JSON.stringify(history));
 
-        // 8. Delete video file on server
+        // 9. Delete video file on server
         await phpPost({ action: 'delete', path: `vids/${target.id}.mp4` });
 
         console.log("🎯 Posting complete, buffer, history updated, video deleted from server.");
