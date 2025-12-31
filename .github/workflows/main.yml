@@ -1,23 +1,32 @@
 name: Reel Bot
 on:
-  workflow_dispatch:   # manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: '0 * * * *'   # every hour
+    - cron: '17 * * * *'  # Runs at :17, :117, etc. (More reliable than '0')
 
 jobs:
   post:
     runs-on: ubuntu-latest
+    timeout-minutes: 20   # Safety: stop if it takes too long
+
     steps:
-      - uses: actions/checkout@v4   # Only pull post_reel.js
+      - name: Checkout Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-      - name: Wait small random offset
+
+      - name: Random Delay (Max 5 Min)
+        # $(( RANDOM % 301 )) generates 0 to 300 seconds (5 minutes)
         run: |
-          OFFSET=$(( RANDOM % 10 ))  # 0-9 minutes
-          echo "Waiting $OFFSET minutes before running..."
-          sleep $(( OFFSET * 60 ))
+          OFFSET=$(( RANDOM % 301 ))
+          echo "Waiting $OFFSET seconds..."
+          sleep $OFFSET
+
       - name: Run Reel Bot
         env:
           INSTA_TOKEN: ${{ secrets.INSTA_TOKEN }}
