@@ -1,26 +1,16 @@
-
 const https = require('https');
 const querystring = require('querystring');
 
 const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
 const TOKEN = process.env.INSTA_TOKEN;
 
-/* =========================
-   DEBUG LOGGER
-========================= */
-function log(stage, msg, obj = null) {
-    const time = new Date().toISOString();
-    console.log(`\n[${time}] [${stage}]`);
-    console.log(msg);
-    if (obj !== null) {
-        console.log("DATA >>>");
-        console.dir(obj, { depth: null });
+function log(stage, msg, data = null) {
+    console.log(`\n[${new Date().toISOString()}] [${stage}] ${msg}`);
+    if (data !== null) {
+        console.dir(data, { depth: null });
     }
 }
 
-/* =========================
-   PHP POST HELPER
-========================= */
 function phpPost(params, fileBuffer) {
     return new Promise((resolve, reject) => {
         const postData = fileBuffer
@@ -29,209 +19,176 @@ function phpPost(params, fileBuffer) {
 
         const url = new URL(PHP_ENDPOINT);
 
-        log("PHP_POST_INIT", "Preparing PHP POST request", {
-            endpoint: PHP_ENDPOINT,
-            params,
-            hasFile: !!fileBuffer,
-            payloadSize: Buffer.byteLength(postData)
-        });
-
-        const options = {
+        const req = https.request({
             method: 'POST',
             hostname: url.hostname,
             path: url.pathname,
             headers: {
                 'Content-Type': 'application/x-www-form-urlencoded',
-                'Content-Length': Buffer.byteLength(postData),
-            },
-        };
-
-        const req = https.request(options, res => {
-            let data = '';
-            log("PHP_POST_RESPONSE", "PHP responded", {
-                statusCode: res.statusCode,
-                headers: res.headers
-            });
-
-            res.on('data', chunk => data += chunk);
+                'Content-Length': Buffer.byteLength(postData)
+            }
+        }, res => {
+            let body = '';
+            res.on('data', c => body += c);
             res.on('end', () => {
-                log("PHP_POST_RAW_BODY", "Raw response body", data);
                 try {
-                    const parsed = JSON.parse(data);
-                    resolve(parsed);
-                } catch (e) {
-                    log("PHP_POST_PARSE_FAIL", "Failed to parse JSON", data);
-                    reject(e);
+                    resolve(JSON.parse(body));
+                } catch {
+                    reject(new Error("Invalid JSON from PHP: " + body));
                 }
             });
         });
 
-        req.on('error', err => {
-            log("PHP_POST_ERROR", "Request error", err);
-            reject(err);
-        });
-
+        req.on('error', reject);
         req.write(postData);
         req.end();
     });
 }
 
-/* =========================
-   MAIN WORKFLOW
-========================= */
+async function ensureHistoryFileExists() {
+    log("HISTORY_CHECK", "Checking if history.json exists");
+
+    let history;
+    try {
+        history = await phpPost({ action: 'download', path: 'history.json' });
+    } catch {
+        history = null;
+    }
+
+    if (!Array.isArray(history)) {
+        log("HISTORY_CREATE", "history.json missing → creating empty file");
+
+        await phpPost(
+            { action: 'upload', path: 'history.json' },
+            JSON.stringify([])
+        );
+
+        const verify = await phpPost({ action: 'download', path: 'history.json' });
+
+        if (!Array.isArray(verify)) {
+            throw new Error("FAILED to create history.json");
+        }
+
+        log("HISTORY_CREATED", "history.json successfully created");
+    } else {
+        log("HISTORY_EXISTS", "history.json already exists");
+    }
+}
+
 async function run() {
     try {
         log("START", "Workflow started");
 
-        /* ---------- LOAD BUFFER ---------- */
-        log("BUFFER_LOAD", "Downloading buffer.json");
-        const bufferResp = await phpPost({ action: 'download', path: 'buffer.json' });
-        log("BUFFER_RAW", "Buffer downloaded", bufferResp);
-
-        if (!Array.isArray(bufferResp)) {
-            throw new Error("buffer.json is not an array");
-        }
-
-        if (bufferResp.length === 0) {
-            log("BUFFER_EMPTY", "No videos in buffer. Exiting.");
+        /* ===== BUFFER ===== */
+        const buffer = await phpPost({ action: 'download', path: 'buffer.json' });
+        if (!Array.isArray(buffer) || buffer.length === 0) {
+            log("BUFFER_EMPTY", "Nothing to post");
             return;
         }
 
-        const buffer = bufferResp;
         const target = buffer[0];
-
-        log("TARGET_SELECTED", "Oldest buffer entry selected", target);
+        log("TARGET", "Selected buffer item", target);
 
         const videoUrl = `https://eaglehoster1.serv00.net/filee/uploads/vids/${target.id}.mp4`;
-        log("VIDEO_URL", "Resolved video URL", videoUrl);
 
-        /* ---------- CREATE CONTAINER ---------- */
-        log("IG_CONTAINER_CREATE", "Creating Instagram media container");
-        const containerResp = await fetch(`https://graph.instagram.com/v24.0/me/media`, {
-            method: 'POST',
-            body: new URLSearchParams({
-                media_type: 'REELS',
-                video_url: videoUrl,
-                caption: target.caption,
-                access_token: TOKEN
-            })
-        });
+        /* ===== CREATE CONTAINER ===== */
+        const container = await (await fetch(
+            "https://graph.instagram.com/v24.0/me/media",
+            {
+                method: 'POST',
+                body: new URLSearchParams({
+                    media_type: 'REELS',
+                    video_url: videoUrl,
+                    caption: target.caption,
+                    access_token: TOKEN
+                })
+            }
+        )).json();
 
-        const container = await containerResp.json();
-        log("IG_CONTAINER_RESPONSE", "Container creation response", container);
+        if (!container.id) throw new Error("Container creation failed");
 
-        if (!container.id) {
-            throw new Error("Instagram container creation failed");
-        }
+        await new Promise(r => setTimeout(r, 15000));
 
-        /* ---------- WAIT BEFORE POLLING ---------- */
-        log("IG_WAIT", "Waiting 30s before polling status");
-        await new Promise(r => setTimeout(r, 30000));
-
-        /* ---------- POLL STATUS ---------- */
-        let isReady = false;
-
-        for (let i = 1; i <= 15; i++) {
-            log("IG_STATUS_POLL", `Polling attempt ${i}`);
-            const statusResp = await fetch(
+        /* ===== POLL ===== */
+        let ready = false;
+        for (let i = 0; i < 15; i++) {
+            const s = await (await fetch(
                 `https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${TOKEN}`
-            );
-            const statusData = await statusResp.json();
-
-            log("IG_STATUS_RESPONSE", "Status response", statusData);
-
-            if (statusData.status_code === 'FINISHED') {
-                isReady = true;
+            )).json();
+           
+            if (s.status_code === "FINISHED") {
+                ready = true;
                 break;
             }
-
+            log("Retrying", "poll " + i);
             await new Promise(r => setTimeout(r, 15000));
         }
 
-        if (!isReady) {
-            throw new Error("Instagram video processing timed out");
-        }
+        if (!ready) throw new Error("Processing timeout");
+       log("Next", "Publishing");
+        /* ===== PUBLISH ===== */
+        const publish = await (await fetch(
+            "https://graph.instagram.com/v24.0/me/media_publish",
+            {
+                method: 'POST',
+                body: new URLSearchParams({
+                    creation_id: container.id,
+                    access_token: TOKEN
+                })
+            }
+        )).json();
 
-        /* ---------- PUBLISH ---------- */
-        log("IG_PUBLISH", "Publishing reel");
-        const publishResp = await fetch(`https://graph.instagram.com/v24.0/me/media_publish`, {
-            method: 'POST',
-            body: new URLSearchParams({
-                creation_id: container.id,
-                access_token: TOKEN
-            })
-        });
+        if (!publish.id) throw new Error("Publish failed");
 
-        const publish = await publishResp.json();
-        log("IG_PUBLISH_RESPONSE", "Publish response", publish);
-
-        if (!publish.id) {
-            throw new Error("Instagram publish failed");
-        }
-
-        /* ---------- COMMENTS ---------- */
+        /* ===== COMMENTS ===== */
         if (Array.isArray(target.comments)) {
-            for (const comment of target.comments) {
-                log("IG_COMMENT", "Posting comment", comment);
-                await fetch(`https://graph.instagram.com/v24.0/${publish.id}/comments`, {
-                    method: 'POST',
-                    body: new URLSearchParams({
-                        message: comment,
-                        access_token: TOKEN
-                    })
-                });
+            for (const c of target.comments) {
+                await fetch(
+                    `https://graph.instagram.com/v24.0/${publish.id}/comments`,
+                    {
+                        method: 'POST',
+                        body: new URLSearchParams({
+                            message: c,
+                            access_token: TOKEN
+                        })
+                    }
+                );
             }
         }
 
-        /* ---------- UPDATE BUFFER ---------- */
-        log("BUFFER_UPDATE", "Removing oldest entry from buffer");
+        /* ===== UPDATE BUFFER ===== */
         buffer.shift();
-
-        log("BUFFER_UPLOAD", "Uploading updated buffer.json", buffer);
-        const uploadResp = await phpPost(
+        await phpPost(
             { action: 'upload', path: 'buffer.json' },
             JSON.stringify(buffer)
         );
-        log("BUFFER_UPLOAD_RESPONSE", "Upload response", uploadResp);
 
-        /* ---------- VERIFY BUFFER ---------- */
-        log("BUFFER_VERIFY", "Re-downloading buffer.json to verify");
-        const verifyBuffer = await phpPost({ action: 'download', path: 'buffer.json' });
-        log("BUFFER_VERIFY_RESULT", "Verified buffer content", verifyBuffer);
+        /* ===== ENSURE + UPDATE HISTORY ===== */
+        await ensureHistoryFileExists();
 
-        if (!Array.isArray(verifyBuffer) || verifyBuffer.length !== buffer.length) {
-            throw new Error("Buffer verification failed — NOT deleting video");
-        }
-
-        /* ---------- UPDATE HISTORY ---------- */
-        log("HISTORY_LOAD", "Loading history.json");
-        const historyResp = await phpPost({ action: 'download', path: 'history.json' });
-        const history = Array.isArray(historyResp) ? historyResp : [];
-
+        const history = await phpPost({ action: 'download', path: 'history.json' });
         history.push({
             ...target,
             postTime: new Date().toISOString(),
-            status: "success",
-            ig_post_id: publish.id
+            ig_post_id: publish.id,
+            status: "success"
         });
 
-        log("HISTORY_UPLOAD", "Uploading updated history.json", history);
         await phpPost(
             { action: 'upload', path: 'history.json' },
             JSON.stringify(history)
         );
 
-        /* ---------- DELETE VIDEO ---------- */
-        log("VIDEO_DELETE", "Deleting video file from server", target.id);
+        /* ===== DELETE VIDEO ===== */
         await phpPost({
             action: 'delete',
             path: `vids/${target.id}.mp4`
         });
 
-        log("DONE", "Workflow completed successfully");
+        log("DONE", "Everything completed successfully");
 
     } catch (err) {
-        log("FATAL_ERROR", err.message, err);
+        log("FATAL", err.message, err);
         process.exit(1);
     }
 }
