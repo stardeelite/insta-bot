@@ -47,7 +47,7 @@ async function run() {
         if (buffer.length === 0) return console.log("Buffer is empty.");
 
         const target = buffer[0]; // first video
-        const videoUrl = `https://eaglehoster1.serv00.net/uploads/vids/${target.id}.mp4`;
+        const videoUrl = `https://eaglehoster1.serv00.net/filee/uploads/vids/${target.id}.mp4`;
 
         console.log(`🚀 Posting video: ${target.id}`);
 
