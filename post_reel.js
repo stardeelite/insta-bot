@@ -1,20 +1,52 @@
-const fetch = require('node-fetch');
-const FormData = require('form-data');
+const https = require('https');
+const querystring = require('querystring');
 
 const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
 const TOKEN = process.env.INSTA_TOKEN;
 
+function phpPost(params, fileBuffer) {
+    return new Promise((resolve, reject) => {
+        const postData = fileBuffer
+            ? querystring.stringify(params) + '&file=' + encodeURIComponent(fileBuffer)
+            : querystring.stringify(params);
+
+        const url = new URL(PHP_ENDPOINT);
+        const options = {
+            method: 'POST',
+            hostname: url.hostname,
+            path: url.pathname,
+            headers: {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'Content-Length': Buffer.byteLength(postData),
+            },
+        };
+
+        const req = https.request(options, res => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+                try {
+                    resolve(JSON.parse(data));
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+
+        req.on('error', reject);
+        req.write(postData);
+        req.end();
+    });
+}
+
 async function run() {
     try {
-        // 1. Download buffer.json from server
-        const bufferResp = await fetch(PHP_ENDPOINT, {
-            method: 'POST',
-            body: new URLSearchParams({ action: 'download', path: 'buffer.json' })
-        });
-        let buffer = await bufferResp.json();
-        if (!Array.isArray(buffer) || buffer.length === 0) return console.log("Buffer empty.");
+        // 1. Load the Queue from server
+        let bufferResp = await phpPost({ action: 'download', path: 'buffer.json' });
+        let buffer = Array.isArray(bufferResp) ? bufferResp : [];
+        if (buffer.length === 0) return console.log("Buffer is empty.");
 
-        const target = buffer[0]; // first video in queue
+        const target = buffer[0]; // first video
         const videoUrl = `https://eaglehoster1.serv00.net/uploads/vids/${target.id}.mp4`;
 
         console.log(`🚀 Posting video: ${target.id}`);
@@ -30,7 +62,7 @@ async function run() {
             })
         });
         const container = await containerResp.json();
-        if (!container.id) throw new Error("Container creation failed");
+        if (!container.id) throw new Error(`Container Fail: ${JSON.stringify(container)}`);
 
         // 3. Poll status_code
         let isReady = false;
@@ -48,11 +80,10 @@ async function run() {
             body: new URLSearchParams({ creation_id: container.id, access_token: TOKEN })
         });
         const publish = await publishResp.json();
-        if (!publish.id) throw new Error("Publish failed");
-
+        if (!publish.id) throw new Error(`Publish Fail: ${JSON.stringify(publish)}`);
         console.log(`✅ Reel Live: ${publish.id}`);
 
-        // 5. Post comments
+        // 5. Post Comments
         if (Array.isArray(target.comments)) {
             for (const comment of target.comments) {
                 await fetch(`https://graph.instagram.com/v24.0/${publish.id}/comments`, {
@@ -64,50 +95,21 @@ async function run() {
 
         // 6. Update buffer.json on server
         buffer.shift(); // remove posted video
-        const bufferForm = new FormData();
-        bufferForm.append('action', 'upload');
-        bufferForm.append('path', 'buffer.json');
-        bufferForm.append('file', Buffer.from(JSON.stringify(buffer, null, 2)), { filename: 'buffer.json' });
-
-        await fetch(PHP_ENDPOINT, { method: 'POST', body: bufferForm });
+        await phpPost({ action: 'upload', path: 'buffer.json' }, JSON.stringify(buffer));
 
         // 7. Update history.json on server
-        let history = [];
-        try {
-            const historyResp = await fetch(PHP_ENDPOINT, {
-                method: 'POST',
-                body: new URLSearchParams({ action: 'download', path: 'history.json' })
-            });
-            history = await historyResp.json();
-        } catch {}
-
+        let historyResp = await phpPost({ action: 'download', path: 'history.json' });
+        let history = Array.isArray(historyResp) ? historyResp : [];
         history.push({ ...target, postTime: new Date().toISOString(), status: "success" });
+        await phpPost({ action: 'upload', path: 'history.json' }, JSON.stringify(history));
 
-        const historyForm = new FormData();
-        historyForm.append('action', 'upload');
-        historyForm.append('path', 'history.json');
-        historyForm.append('file', Buffer.from(JSON.stringify(history, null, 2)), { filename: 'history.json' });
+        // 8. Delete video file on server
+        await phpPost({ action: 'delete', path: `vids/${target.id}.mp4` });
 
-        await fetch(PHP_ENDPOINT, { method: 'POST', body: historyForm });
+        console.log("🎯 Posting complete, buffer, history updated, video deleted from server.");
 
-        console.log("🎯 Posting complete, buffer and history updated on server.");
-
-        // 8. Delete video from server
-        const deleteForm = new FormData();
-        deleteForm.append('action', 'delete');
-        deleteForm.append('path', `vids/${target.id}.mp4`);
-
-        const deleteResp = await fetch(PHP_ENDPOINT, { method: 'POST', body: deleteForm });
-        const deleteResult = await deleteResp.json();
-
-        if (deleteResult.status !== 'success') {
-          console.warn(`⚠️ Failed to delete video ${target.id}: ${deleteResult.message}`);
-        } else {
-          console.log(`🗑️ Video ${target.id}.mp4 deleted from server.`);
-        }
-
-    } catch (err) {
-        console.error("❌ Error:", err.message);
+    } catch (error) {
+        console.error("❌ Error:", error.message);
         process.exit(1);
     }
 }
