@@ -1,82 +1,115 @@
-const fs = require('fs').promises;
+const fetch = require('node-fetch');
+const FormData = require('form-data');
+
+const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
+const TOKEN = process.env.INSTA_TOKEN;
 
 async function run() {
-  try {
-    // 1. Load the Queue
-    const bufferData = await fs.readFile('./buffer.json', 'utf8');
-    let buffer = JSON.parse(bufferData);
-    if (buffer.length === 0) return console.log("Buffer is empty.");
-
-    // 2. Identify Video & Path (Automatic Detection)
-    const target = buffer[0]; 
-    const token = process.env.INSTA_TOKEN;
-    const repo = process.env.GITHUB_REPOSITORY; // Automatically gets "username/reponame"
-    
-    // This creates the public link Instagram needs to download your video
-    const videoUrl = `https://raw.githubusercontent.com/${repo}/main/vids/${target.id}.mp4`;
-
-    console.log(`🚀 Posting: ${target.id}`);
-
-    // 3. Step 1: Create the Container (Updated to graph.instagram.com v24.0)
-    const containerResp = await fetch(`https://graph.instagram.com/v24.0/me/media`, {
-      method: 'POST',
-      body: new URLSearchParams({
-        media_type: 'REELS',
-        video_url: videoUrl,
-        caption: target.caption,
-        access_token: token
-      })
-    });
-    const container = await containerResp.json();
-    if (!container.id) throw new Error(`Container Fail: ${JSON.stringify(container)}`);
-
-    // 4. Step 2: Poll for status_code (Updated field for 2025)
-    let isReady = false;
-    for (let i = 0; i < 15; i++) {
-      const statusResp = await fetch(`https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${token}`);
-      const statusData = await statusResp.json();
-      if (statusData.status_code === 'FINISHED') { isReady = true; break; }
-      await new Promise(r => setTimeout(r, 20000)); // Wait 20s
-    }
-    if (!isReady) throw new Error("Video processing timed out.");
-
-    // 5. Step 3: Publish the Reel (Updated to graph.instagram.com v24.0)
-    const publishResp = await fetch(`https://graph.instagram.com/v24.0/me/media_publish`, {
-      method: 'POST',
-      body: new URLSearchParams({ creation_id: container.id, access_token: token })
-    });
-    const publish = await publishResp.json();
-    if (!publish.id) throw new Error(`Publish Fail: ${JSON.stringify(publish)}`);
-    
-    console.log(`✅ Reel Live: ${publish.id}`);
-
-    // 6. Step 4: Post Comments (Updated to graph.instagram.com v24.0)
-    if (target.comments && Array.isArray(target.comments)) {
-      for (const comment of target.comments) {
-        await fetch(`https://graph.instagram.com/v24.0/${publish.id}/comments`, {
-          method: 'POST',
-          body: new URLSearchParams({ message: comment, access_token: token })
+    try {
+        // 1. Download buffer.json from server
+        const bufferResp = await fetch(PHP_ENDPOINT, {
+            method: 'POST',
+            body: new URLSearchParams({ action: 'download', path: 'buffer.json' })
         });
-      }
+        let buffer = await bufferResp.json();
+        if (!Array.isArray(buffer) || buffer.length === 0) return console.log("Buffer empty.");
+
+        const target = buffer[0]; // first video in queue
+        const videoUrl = `https://eaglehoster1.serv00.net/uploads/vids/${target.id}.mp4`;
+
+        console.log(`🚀 Posting video: ${target.id}`);
+
+        // 2. Create Instagram container
+        const containerResp = await fetch(`https://graph.instagram.com/v24.0/me/media`, {
+            method: 'POST',
+            body: new URLSearchParams({
+                media_type: 'REELS',
+                video_url: videoUrl,
+                caption: target.caption,
+                access_token: TOKEN
+            })
+        });
+        const container = await containerResp.json();
+        if (!container.id) throw new Error("Container creation failed");
+
+        // 3. Poll status_code
+        let isReady = false;
+        for (let i = 0; i < 15; i++) {
+            const statusResp = await fetch(`https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${TOKEN}`);
+            const statusData = await statusResp.json();
+            if (statusData.status_code === 'FINISHED') { isReady = true; break; }
+            await new Promise(r => setTimeout(r, 20000));
+        }
+        if (!isReady) throw new Error("Video processing timed out.");
+
+        // 4. Publish Reel
+        const publishResp = await fetch(`https://graph.instagram.com/v24.0/me/media_publish`, {
+            method: 'POST',
+            body: new URLSearchParams({ creation_id: container.id, access_token: TOKEN })
+        });
+        const publish = await publishResp.json();
+        if (!publish.id) throw new Error("Publish failed");
+
+        console.log(`✅ Reel Live: ${publish.id}`);
+
+        // 5. Post comments
+        if (Array.isArray(target.comments)) {
+            for (const comment of target.comments) {
+                await fetch(`https://graph.instagram.com/v24.0/${publish.id}/comments`, {
+                    method: 'POST',
+                    body: new URLSearchParams({ message: comment, access_token: TOKEN })
+                });
+            }
+        }
+
+        // 6. Update buffer.json on server
+        buffer.shift(); // remove posted video
+        const bufferForm = new FormData();
+        bufferForm.append('action', 'upload');
+        bufferForm.append('path', 'buffer.json');
+        bufferForm.append('file', Buffer.from(JSON.stringify(buffer, null, 2)), { filename: 'buffer.json' });
+
+        await fetch(PHP_ENDPOINT, { method: 'POST', body: bufferForm });
+
+        // 7. Update history.json on server
+        let history = [];
+        try {
+            const historyResp = await fetch(PHP_ENDPOINT, {
+                method: 'POST',
+                body: new URLSearchParams({ action: 'download', path: 'history.json' })
+            });
+            history = await historyResp.json();
+        } catch {}
+
+        history.push({ ...target, postTime: new Date().toISOString(), status: "success" });
+
+        const historyForm = new FormData();
+        historyForm.append('action', 'upload');
+        historyForm.append('path', 'history.json');
+        historyForm.append('file', Buffer.from(JSON.stringify(history, null, 2)), { filename: 'history.json' });
+
+        await fetch(PHP_ENDPOINT, { method: 'POST', body: historyForm });
+
+        console.log("🎯 Posting complete, buffer and history updated on server.");
+
+        // 8. Delete video from server
+        const deleteForm = new FormData();
+        deleteForm.append('action', 'delete');
+        deleteForm.append('path', `vids/${target.id}.mp4`);
+
+        const deleteResp = await fetch(PHP_ENDPOINT, { method: 'POST', body: deleteForm });
+        const deleteResult = await deleteResp.json();
+
+        if (deleteResult.status !== 'success') {
+          console.warn(`⚠️ Failed to delete video ${target.id}: ${deleteResult.message}`);
+        } else {
+          console.log(`🗑️ Video ${target.id}.mp4 deleted from server.`);
+        }
+
+    } catch (err) {
+        console.error("❌ Error:", err.message);
+        process.exit(1);
     }
-
-    // 7. Data Move: Buffer -> History
-    buffer.shift();
-    await fs.writeFile('./buffer.json', JSON.stringify(buffer, null, 2));
-
-    let history = [];
-    try { history = JSON.parse(await fs.readFile('./history.json', 'utf8')); } catch (e) {}
-    history.push({ ...target, postTime: new Date().toISOString(), status: "success" });
-    await fs.writeFile('./history.json', JSON.stringify(history, null, 2));
-
-    // 8. Delete Video File
-    await fs.unlink(`./vids/${target.id}.mp4`);
-
-  } catch (error) {
-    console.error("❌ Error:", error.message);
-    process.exit(1);
-  }
 }
-run();
 
-    
+run();
