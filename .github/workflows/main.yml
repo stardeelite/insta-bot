@@ -6,9 +6,7 @@ on:
         description: 'Why are you running this? (e.g., Manually fixed)'
         required: false
         default: 'Trigger'
-  schedule:
-    - cron: '17 * * * *'  # Runs at :17, :117, etc.  (More reliable than '0')
-
+  
 jobs:
   post:
     runs-on: ubuntu-latest
