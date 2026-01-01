@@ -1,8 +1,8 @@
 name: Reel Bot
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '18,48 * * * *'  # Runs at :17, :117, etc.  (More reliable than '0')
+  #schedule:
+  #  - cron: '18,48 * * * *'  # Runs at :17, :117, etc.  (More reliable than '0')
   
 jobs:
   post:
