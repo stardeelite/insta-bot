@@ -11,6 +11,24 @@ function log(stage, msg, data = null) {
     }
 }
 
+function formatIST(date = new Date()) {
+    const istOffsetMs = 5.5 * 60 * 60 * 1000;
+    const ist = new Date(date.getTime() + istOffsetMs);
+
+    let dd = String(ist.getUTCDate()).padStart(2, '0');
+    let mm = String(ist.getUTCMonth() + 1).padStart(2, '0');
+    let yy = String(ist.getUTCFullYear()).slice(-2);
+
+    let hh = ist.getUTCHours();
+    const ampm = hh >= 12 ? 'pm' : 'am';
+    hh = hh % 12 || 12;
+
+    let min = String(ist.getUTCMinutes()).padStart(2, '0');
+    let sec = String(ist.getUTCSeconds()).padStart(2, '0');
+
+    return `${dd}/${mm}/${yy} - ${String(hh).padStart(2, '0')}:${min}:${sec} ${ampm}`;
+}
+
 function phpPost(params, fileContent) {
     return new Promise((resolve, reject) => {
 
@@ -183,8 +201,8 @@ async function run() {
 
         const history = await phpPost({ action: 'download', path: 'history.json' });
         history.push({
-            ...target,
-            postTime: new Date().toISOString(),
+           ...target,
+            postTime: formatIST(),
             ig_post_id: publish.id,
             status: "success"
         });
