@@ -5,7 +5,7 @@ const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.ne
 
 /* ===== MULTI ACCOUNT TOKENS ===== */
 const TOKENS = [
-    process.env.INSTA_TOKEN,
+    process.env.INSTA_TOKN,
     process.env.INSTA_TOKEN_bsclipz,
     // add more tokens if needed
 ].filter(Boolean);
