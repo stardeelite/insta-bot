@@ -2,7 +2,13 @@ const https = require('https');
 const querystring = require('querystring');
 
 const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
-const TOKEN = process.env.INSTA_TOKEN;
+
+/* ===== MULTI ACCOUNT TOKENS ===== */
+const TOKENS = [
+    process.env.INSTA_TOKEN,
+    process.env.INSTA_TOKEN_bsclipz,
+    // add more tokens if needed
+].filter(Boolean);
 
 function log(stage, msg, data = null) {
     console.log(`\n[${new Date().toISOString()}] [${stage}] ${msg}`);
@@ -124,69 +130,92 @@ async function run() {
 
         const videoUrl = `https://eaglehoster1.serv00.net/filee/uploads/vids/${target.id}.mp4`;
 
-        /* ===== CREATE CONTAINER ===== */
-        const container = await (await fetch(
-            "https://graph.instagram.com/v24.0/me/media",
-            {
-                method: 'POST',
-                body: new URLSearchParams({
-                    media_type: 'REELS',
-                    video_url: videoUrl,
-                    caption: target.caption,
-                    access_token: TOKEN
-                })
-            }
-        )).json();
+        let successCount = 0;
+        let publishedIds = [];
 
-        if (!container.id) throw new Error("Container creation failed");
+        for (let t = 0; t < TOKENS.length; t++) {
+            const TOKEN = TOKENS[t];
+            log("ACCOUNT", `Starting account ${t + 1}`);
 
-        await new Promise(r => setTimeout(r, 60000));
-
-        /* ===== POLL ===== */
-        let ready = false;
-        for (let i = 0; i < 15; i++) {
-            const s = await (await fetch(
-                `https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${TOKEN}`
-            )).json();
-           
-            if (s.status_code === "FINISHED") {
-                ready = true;
-                break;
-            }
-            log("Retrying", "poll " + i);
-            await new Promise(r => setTimeout(r, 30000));
-        }
-
-        if (!ready) throw new Error("Processing timeout");
-       log("Next", "Publishing");
-        /* ===== PUBLISH ===== */
-        const publish = await (await fetch(
-            "https://graph.instagram.com/v24.0/me/media_publish",
-            {
-                method: 'POST',
-                body: new URLSearchParams({
-                    creation_id: container.id,
-                    access_token: TOKEN
-                })
-            }
-        )).json();
-
-        if (!publish.id) throw new Error("Publish failed");
-
-        /* ===== COMMENTS ===== */
-        if (Array.isArray(target.comments)) {
-            for (const c of target.comments) {
-                await fetch(
-                    `https://graph.instagram.com/v24.0/${publish.id}/comments`,
+            try {
+                /* ===== CREATE CONTAINER ===== */
+                const container = await (await fetch(
+                    "https://graph.instagram.com/v24.0/me/media",
                     {
                         method: 'POST',
                         body: new URLSearchParams({
-                            message: c,
+                            media_type: 'REELS',
+                            video_url: videoUrl,
+                            caption: target.caption,
                             access_token: TOKEN
                         })
                     }
-                );
+                )).json();
+
+                if (!container.id) throw new Error("Container creation failed");
+
+                await new Promise(r => setTimeout(r, 60000));
+
+                /* ===== POLL ===== */
+                let ready = false;
+                for (let i = 0; i < 15; i++) {
+                    const s = await (await fetch(
+                        `https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${TOKEN}`
+                    )).json();
+
+                    if (s.status_code === "FINISHED") {
+                        ready = true;
+                        break;
+                    }
+
+                    log("Retrying", `poll ${i} (acc ${t + 1})`);
+                    await new Promise(r => setTimeout(r, 30000));
+                }
+
+                if (!ready) throw new Error("Processing timeout");
+
+                log("Next", "Publishing");
+
+                /* ===== PUBLISH ===== */
+                const publish = await (await fetch(
+                    "https://graph.instagram.com/v24.0/me/media_publish",
+                    {
+                        method: 'POST',
+                        body: new URLSearchParams({
+                            creation_id: container.id,
+                            access_token: TOKEN
+                        })
+                    }
+                )).json();
+
+                if (!publish.id) throw new Error("Publish failed");
+
+                /* ===== COMMENTS ===== */
+                if (Array.isArray(target.comments)) {
+                    for (const c of target.comments) {
+                        await fetch(
+                            `https://graph.instagram.com/v24.0/${publish.id}/comments`,
+                            {
+                                method: 'POST',
+                                body: new URLSearchParams({
+                                    message: c,
+                                    access_token: TOKEN
+                                })
+                            }
+                        );
+                    }
+                }
+
+                successCount++;
+                publishedIds.push(publish.id);
+
+                log("ACCOUNT_SUCCESS", `Account ${t + 1} posted`, publish.id);
+
+            } catch (e) {
+                log("ACCOUNT_ERROR", `Account ${t + 1} failed`, e.message);
             }
+
+            await new Promise(r => setTimeout(r, 120000));
         }
 
         /* ===== UPDATE BUFFER ===== */
@@ -201,10 +230,10 @@ async function run() {
 
         const history = await phpPost({ action: 'download', path: 'history.json' });
         history.push({
-           ...target,
+            ...target,
             postTime: formatIST(),
-            ig_post_id: publish.id,
-            status: "success"
+            ig_post_ids: publishedIds,
+            status: successCount > 0 ? "success" : "failed"
         });
 
         await phpPost(
@@ -212,13 +241,18 @@ async function run() {
             JSON.stringify(history)
         );
 
-        /* ===== DELETE VIDEO ===== */
-        await phpPost({
-            action: 'delete',
-            path: `vids/${target.id}.mp4`
-        });
+        /* ===== DELETE VIDEO (CONDITIONAL) ===== */
+        if (successCount > 0) {
+            await phpPost({
+                action: 'delete',
+                path: `vids/${target.id}.mp4`
+            });
+            log("VIDEO", "Deleted after successful post(s)");
+        } else {
+            log("VIDEO", "Not deleted — no account succeeded");
+        }
 
-        log("DONE", "Everything completed successfully");
+        log("DONE", "Workflow completed");
 
     } catch (err) {
         log("FATAL", err.message, err);
