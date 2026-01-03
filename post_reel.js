@@ -9,6 +9,7 @@ const TOKENS = [
     process.env.INSTA_TOKEN_BSCLIPZ,
     // add more tokens if needed
 ].filter(Boolean);
+console.log("TOKENS:", TOKENS.length, TOKENS);
 
 function log(stage, msg, data = null) {
     console.log(`\n[${new Date().toISOString()}] [${stage}] ${msg}`);
