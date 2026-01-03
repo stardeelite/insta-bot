@@ -243,15 +243,15 @@ async function run() {
         );
 
         /* ===== DELETE VIDEO (CONDITIONAL) ===== */
-        if (successCount > 0) {
-            await phpPost({
-                action: 'delete',
-                path: `vids/${target.id}.mp4`
-            });
-            log("VIDEO", "Deleted after successful post(s)");
-        } else {
-            log("VIDEO", "Not deleted — no account succeeded");
-        }
+        //if (successCount > 0) {
+            //await phpPost({
+            //    action: 'delete',
+            //    path: `vids/${target.id}.mp4`
+            //});
+            //log("VIDEO", "Deleted after successful post(s)");
+        //} else {
+            //log("VIDEO", "Not deleted — no account succeeded");
+        //}
 
         log("DONE", "Workflow completed");
 
