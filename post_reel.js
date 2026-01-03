@@ -253,6 +253,18 @@ async function run() {
             //log("VIDEO", "Not deleted — no account succeeded");
         //}
 
+        /* ===== MOVE VIDEO (CONDITIONAL) ===== */
+        if (successCount > 0) {
+             await phpPost({
+                action: 'move',
+                from: `vids/${target.id}.mp4`,
+                to: `posted_vids/${target.id}.mp4`
+            });
+            log("VIDEO", "Moved to posted_vids after successful post(s)");
+       } else {
+            log("VIDEO", "Not moved — no account succeeded");
+       }
+
         log("DONE", "Workflow completed");
 
     } catch (err) {
