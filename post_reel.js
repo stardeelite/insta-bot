@@ -159,7 +159,7 @@ async function run() {
 
                 /* ===== POLL ===== */
                 let ready = false;
-                for (let i = 0; i < 15; i++) {
+                for (let i = 0; i < 3; i++) {
                     const s = await (await fetch(
                         `https://graph.instagram.com/v24.0/${container.id}?fields=status_code&access_token=${TOKEN}`
                     )).json();
