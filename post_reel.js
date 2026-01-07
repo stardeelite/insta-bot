@@ -2,12 +2,12 @@ const https = require('https');
 const querystring = require('querystring');
 
 const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
+const AUTO_CONV_URL = "https://eaglehoster1.serv00.net/filee/uploads/auto_conv.php";
 
 /* ===== MULTI ACCOUNT TOKENS ===== */
 const TOKENS = [
     process.env.INSTA_TOKEN,
     process.env.INSTA_TOKEN_BSCLIPZ,
-    // add more tokens if needed
 ].filter(Boolean);
 console.log("TOKENS:", TOKENS.length, TOKENS);
 
@@ -85,6 +85,21 @@ function phpPost(params, fileContent) {
     });
 }
 
+/* ===== NEW: AUTO CONVERTER TRIGGER ===== */
+function triggerAutoConv() {
+    log("AUTO_CONV", "Triggering auto_conv.php");
+
+    return new Promise((resolve, reject) => {
+        https.get(AUTO_CONV_URL, res => {
+            res.on('data', () => {});
+            res.on('end', () => {
+                log("AUTO_CONV_DONE", "auto_conv.php finished");
+                resolve();
+            });
+        }).on('error', reject);
+    });
+}
+
 async function ensureHistoryFileExists() {
     log("HISTORY_CHECK", "Checking if history.json exists");
 
@@ -115,15 +130,29 @@ async function ensureHistoryFileExists() {
     }
 }
 
+function isUsable(entry) {
+    return entry && typeof entry === 'object' && entry.id;
+}
+
 async function run() {
     try {
         log("START", "Workflow started");
 
         /* ===== BUFFER ===== */
-        const buffer = await phpPost({ action: 'download', path: 'buffer.json' });
-        if (!Array.isArray(buffer) || buffer.length === 0) {
-            log("BUFFER_EMPTY", "Nothing to post");
-            return;
+        let buffer = await phpPost({ action: 'download', path: 'buffer.json' });
+
+        if (!Array.isArray(buffer) || buffer.length === 0 || !isUsable(buffer[0])) {
+            log("BUFFER_EMPTY", "No usable buffer entry");
+
+            await triggerAutoConv();
+            await new Promise(r => setTimeout(r, 10000));
+
+            buffer = await phpPost({ action: 'download', path: 'buffer.json' });
+
+            if (!Array.isArray(buffer) || buffer.length === 0 || !isUsable(buffer[0])) {
+                log("BUFFER_STILL_EMPTY", "Nothing usable after auto_conv → exiting");
+                return;
+            }
         }
 
         const target = buffer[0];
@@ -139,7 +168,6 @@ async function run() {
             log("ACCOUNT", `Starting account ${t + 1}`);
 
             try {
-                /* ===== CREATE CONTAINER ===== */
                 const container = await (await fetch(
                     "https://graph.instagram.com/v24.0/me/media",
                     {
@@ -157,7 +185,6 @@ async function run() {
 
                 await new Promise(r => setTimeout(r, 60000));
 
-                /* ===== POLL ===== */
                 let ready = false;
                 for (let i = 0; i < 3; i++) {
                     const s = await (await fetch(
@@ -175,9 +202,6 @@ async function run() {
 
                 if (!ready) throw new Error("Processing timeout");
 
-                log("Next", "Publishing");
-
-                /* ===== PUBLISH ===== */
                 const publish = await (await fetch(
                     "https://graph.instagram.com/v24.0/me/media_publish",
                     {
@@ -191,7 +215,6 @@ async function run() {
 
                 if (!publish.id) throw new Error("Publish failed");
 
-                /* ===== COMMENTS ===== */
                 if (Array.isArray(target.comments)) {
                     for (const c of target.comments) {
                         await fetch(
@@ -209,7 +232,6 @@ async function run() {
 
                 successCount++;
                 publishedIds.push(publish.id);
-
                 log("ACCOUNT_SUCCESS", `Account ${t + 1} posted`, publish.id);
 
             } catch (e) {
@@ -219,14 +241,39 @@ async function run() {
             await new Promise(r => setTimeout(r, 120000));
         }
 
-        /* ===== UPDATE BUFFER ===== */
-        buffer.shift();
+        /*buffer.shift();
         await phpPost(
             { action: 'upload', path: 'buffer.json' },
             JSON.stringify(buffer)
+        );*/
+
+        /* ===== SAFE BUFFER UPDATE (NO REVERTS) ===== */
+
+// Re-download latest buffer BEFORE modifying
+let latestBuffer = await phpPost({ action: 'download', path: 'buffer.json' });
+
+if (Array.isArray(latestBuffer) && latestBuffer.length > 0) {
+
+    // Remove ONLY the exact item we processed (by id)
+    const idx = latestBuffer.findIndex(e => e && e.id === target.id);
+
+    if (idx !== -1) {
+        latestBuffer.splice(idx, 1);
+
+        await phpPost(
+            { action: 'upload', path: 'buffer.json' },
+            JSON.stringify(latestBuffer)
         );
 
-        /* ===== ENSURE + UPDATE HISTORY ===== */
+        log("BUFFER_UPDATE", `Safely removed ${target.id} from buffer`);
+    } else {
+        log("BUFFER_UPDATE", "Target already removed by another process");
+    }
+
+} else {
+    log("BUFFER_UPDATE", "Buffer empty or invalid at update time");
+}
+
         await ensureHistoryFileExists();
 
         const history = await phpPost({ action: 'download', path: 'history.json' });
@@ -242,28 +289,16 @@ async function run() {
             JSON.stringify(history)
         );
 
-        /* ===== DELETE VIDEO (CONDITIONAL) ===== */
-        //if (successCount > 0) {
-            //await phpPost({
-            //    action: 'delete',
-            //    path: `vids/${target.id}.mp4`
-            //});
-            //log("VIDEO", "Deleted after successful post(s)");
-        //} else {
-            //log("VIDEO", "Not deleted — no account succeeded");
-        //}
-
-        /* ===== MOVE VIDEO (CONDITIONAL) ===== */
         if (successCount > 0) {
-             await phpPost({
+            await phpPost({
                 action: 'move',
                 from: `vids/${target.id}.mp4`,
                 to: `posted_vids/${target.id}.mp4`
             });
             log("VIDEO", "Moved to posted_vids after successful post(s)");
-       } else {
+        } else {
             log("VIDEO", "Not moved — no account succeeded");
-       }
+        }
 
         log("DONE", "Workflow completed");
 
