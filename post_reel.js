@@ -2,7 +2,7 @@ const https = require('https');
 const querystring = require('querystring');
 
 const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
-const AUTO_CONV_URL = "https://eaglehoster1.serv00.net/filee/uploads/auto_conv.php";
+const AUTO_CONV_URL = "https://eaglehoster1.serv00.net/filee/uploads/auto_conv.php?start=-75";
 
 /* ===== MULTI ACCOUNT TOKENS ===== */
 const TOKENS = [
@@ -145,7 +145,7 @@ async function run() {
             log("BUFFER_EMPTY", "No usable buffer entry");
 
             await triggerAutoConv();
-            await new Promise(r => setTimeout(r, 10000));
+            await new Promise(r => setTimeout(r, 30000));
 
             buffer = await phpPost({ action: 'download', path: 'buffer.json' });
 
