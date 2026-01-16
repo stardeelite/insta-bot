@@ -186,7 +186,7 @@ async function run() {
                 }
             }
     
-            process.exit(0); // stop program immediately
+            process.exit(1); // stop program immediately
         }
         
         let successCount = 0;
