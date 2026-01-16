@@ -100,6 +100,14 @@ function triggerAutoConv() {
     });
 }
 
+function urlExists(url) {
+    return new Promise(resolve => {
+        https.get(url, res => {
+            resolve(res.statusCode === 200);
+        }).on('error', () => resolve(false));
+    });
+}
+
 async function ensureHistoryFileExists() {
     log("HISTORY_CHECK", "Checking if history.json exists");
 
@@ -160,6 +168,27 @@ async function run() {
 
         const videoUrl = `https://eaglehoster1.serv00.net/filee/uploads/vids/${target.id}.mp4`;
 
+        if (!(await urlExists(videoUrl))) {
+            log("VIDEO_MISSING", `Video URL not reachable: ${videoUrl}. Removing from buffer and stopping.`);
+    
+            // Re-download latest buffer before removing
+            let latestBuffer = await phpPost({ action: 'download', path: 'buffer.json' });
+    
+            if (Array.isArray(latestBuffer) && latestBuffer.length > 0) {
+                const idx = latestBuffer.findIndex(e => e && e.id === target.id);
+                if (idx !== -1) {
+                    latestBuffer.splice(idx, 1); // remove the entry completely
+                    await phpPost(
+                        { action: 'upload', path: 'buffer.json' },
+                    JSON.stringify(latestBuffer)
+                );
+                    log("BUFFER_UPDATE", `Removed ${target.id} from buffer`);
+                }
+            }
+    
+            process.exit(0); // stop program immediately
+        }
+        
         let successCount = 0;
         let publishedIds = [];
 
@@ -289,16 +318,16 @@ if (Array.isArray(latestBuffer) && latestBuffer.length > 0) {
             JSON.stringify(history)
         );
 
-        if (successCount > 0) {
+      //  if (successCount > 0) {
             await phpPost({
                 action: 'move',
                 from: `vids/${target.id}.mp4`,
                 to: `posted_vids/${target.id}.mp4`
             });
             log("VIDEO", "Moved to posted_vids after successful post(s)");
-        } else {
+     /*   } else {
             log("VIDEO", "Not moved — no account succeeded");
-        }
+        }*/
 
         log("DONE", "Workflow completed");
 
