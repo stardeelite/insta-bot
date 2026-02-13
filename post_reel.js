@@ -64,7 +64,7 @@ function phpPost(params, fileContent) {
             hostname: url.hostname,
             path: url.pathname,
             headers: {
-                'X-Secret-Key': process.env.INTERNAL_SECRET
+                'X-Secret-Key': process.env.INTERNAL_SECRET,
                 'Content-Type': `multipart/form-data; boundary=${boundary}`,
                 'Content-Length': Buffer.byteLength(body)
             }
