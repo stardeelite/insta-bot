@@ -31,5 +31,6 @@ jobs:
         env:
           INSTA_TOKEN: ${{ secrets.INSTA_TOKEN }}
           # INSTA_TOKEN_BSCLIPZ: ${{ secrets.INSTA_TOKEN_BSCLIPZ }}
+          INTERNAL_SECRET: ${{ secrets.INTERNAL_SECRET }}
           PHP_ENDPOINT: "https://eaglehoster1.serv00.net/filee/file_manager.php"
         run: node post_reel.js
