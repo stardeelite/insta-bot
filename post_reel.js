@@ -9,7 +9,7 @@ const TOKENS = [
     process.env.INSTA_TOKEN,
     process.env.INSTA_TOKEN_BSCLIPZ,
 ].filter(Boolean);
-console.log("TOKENS:", TOKENS.length, TOKENS);
+console.log("TOKENS:", TOKENS.length);
 
 function log(stage, msg, data = null) {
     console.log(`\n[${new Date().toISOString()}] [${stage}] ${msg}`);
@@ -64,6 +64,7 @@ function phpPost(params, fileContent) {
             hostname: url.hostname,
             path: url.pathname,
             headers: {
+                'X-Secret-Key': process.env.INTERNAL_SECRET
                 'Content-Type': `multipart/form-data; boundary=${boundary}`,
                 'Content-Length': Buffer.byteLength(body)
             }
