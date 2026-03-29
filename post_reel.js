@@ -3,6 +3,7 @@ const querystring = require('querystring');
 
 const PHP_ENDPOINT = process.env.PHP_ENDPOINT || "https://eaglehoster1.serv00.net/filee/file_manager.php";
 const AUTO_CONV_URL = "https://eaglehoster1.serv00.net/filee/uploads/auto_conv.php?start=-75";
+const ENABLE_AUTO_CONV = process.env.ENABLE_AUTO_CONV === "true";
 
 /* ===== MULTI ACCOUNT TOKENS ===== */
 const TOKENS = [
@@ -151,7 +152,15 @@ async function run() {
         let buffer = await phpPost({ action: 'download', path: 'buffer.json' });
 
         if (!Array.isArray(buffer) || buffer.length === 0 || !isUsable(buffer[0])) {
+
             log("BUFFER_EMPTY", "No usable buffer entry");
+
+            if (!ENABLE_AUTO_CONV) {
+                log("AUTO_CONV_DISABLED", "Skipping auto conversion. Exiting cleanly.");
+                return; // 🔥 HARD STOP → NO reuse, NO generation
+            }
+
+            log("AUTO_CONV_ENABLED", "Triggering auto conversion");
 
             await triggerAutoConv();
             await new Promise(r => setTimeout(r, 30000));
@@ -159,7 +168,7 @@ async function run() {
             buffer = await phpPost({ action: 'download', path: 'buffer.json' });
 
             if (!Array.isArray(buffer) || buffer.length === 0 || !isUsable(buffer[0])) {
-                log("BUFFER_STILL_EMPTY", "Nothing usable after auto_conv → exiting");
+                log("BUFFER_STILL_EMPTY", "Still empty after auto_conv → exiting");
                 return;
             }
         }
